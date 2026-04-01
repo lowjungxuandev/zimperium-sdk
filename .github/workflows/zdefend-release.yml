@@ -1,8 +1,15 @@
 # zDefend: sign SDK and publish GitHub Release (AAR + optional xcframework zip).
-# act skips steps that need GitHub (ACTIONS_RUNTIME_TOKEN / release API): upload-artifact,
-# release metadata, Create GitHub Release when env.ACT=true (nektos/act sets this locally).
-# Optional: act --artifact-server-path /tmp/act-artifacts to enable upload-artifact locally.
+#
+# workflow_dispatch default dry_run=true -> NO signing, NO release (smoke only).
+# Full release: dry_run=false + vendor zip (vendor_zip_url or secret VENDOR_ZIP_URL or *defend*.zip in repo)
+# + optional release_tag (e.g. v5.8.54). Otherwise tag defaults to v<sdk version from output>.
+#
+# act: upload-artifact / release skipped when env.ACT=true. Optional: --artifact-server-path
 name: zDefend release
+
+env:
+  # Quieter Node 20 deprecation warnings on ubuntu-latest (see GitHub changelog)
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 on:
   push:
@@ -25,6 +32,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   sign-and-release:
@@ -144,6 +152,7 @@ jobs:
         if: ${{ env.ACT != 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) && steps.out.outputs.version != '' }}
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ steps.meta.outputs.tag }}
           generate_release_notes: true
@@ -151,3 +160,20 @@ jobs:
           files: |
             zdefend/output/${{ steps.out.outputs.version }}/android/ZDefend.aar
             zdefend/output/${{ steps.out.outputs.version }}/iOS/ZDefend.xcframework.zip
+
+      - name: Job summary (dry run vs release)
+        if: always()
+        run: |
+          {
+            echo "## zDefend release"
+            echo ""
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+              echo "**Dry run** was enabled: signing, artifacts, and **Create GitHub Release** were **skipped on purpose**."
+              echo ""
+              echo "To publish a release, run this workflow again with **dry_run = false** and supply a vendor \`*defend*.zip\` (input \`vendor_zip_url\` or secret \`VENDOR_ZIP_URL\`, or ensure the zip is in the repo). Set **release_tag** if you want a specific tag name (e.g. \`v5.8.54\`)."
+            elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" != "true" ]; then
+              echo "Full run: signing and release steps were eligible to run (see steps above for success or errors)."
+            elif [ "${{ github.event_name }}" = "push" ]; then
+              echo "Triggered by tag push: release uses the pushed tag name."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
