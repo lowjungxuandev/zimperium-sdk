@@ -30,8 +30,6 @@ jobs:
           REQUEST_ID: ${{ secrets.REQUEST_ID }}
           TOKEN: ${{ secrets.TOKEN }}
           API_TOKEN: ${{ secrets.API_TOKEN }}
-          ZDEFEND_ANDROID_CSV: ${{ secrets.ZDEFEND_ANDROID_CSV }}
-          ZDEFEND_IOS_CSV: ${{ secrets.ZDEFEND_IOS_CSV }}
         run: |
           set -euo pipefail
 
@@ -47,15 +45,10 @@ jobs:
             "$TOKEN" \
             "$API_TOKEN" > .env
 
-          if [ -n "${ZDEFEND_ANDROID_CSV:-}" ]; then
-            mkdir -p csv/android
-            printf '%s\n' "$ZDEFEND_ANDROID_CSV" > csv/android/zdefend.csv
-          fi
-
-          if [ -n "${ZDEFEND_IOS_CSV:-}" ]; then
-            mkdir -p csv/ios
-            printf '%s\n' "$ZDEFEND_IOS_CSV" > csv/ios/zdefend.csv
-          fi
+          [ -f csv/android/zdefend.csv ] || {
+            echo "Missing csv/android/zdefend.csv — commit it in the repo or add the file before running this workflow."
+            exit 1
+          }
 
           chmod +x scripts/download.sh scripts/csv.sh scripts/sign.sh scripts/test.sh
 
