@@ -1,7 +1,7 @@
 # zDefend: sign SDK and publish GitHub Release (AAR + optional xcframework zip).
 #
 # Triggers:
-# - push to main -> smoke test only (no signing, artifacts, or release)
+# - push to main -> full release
 # - push of tag v* -> full release, using the pushed tag name
 # - workflow_dispatch default dry_run=true -> smoke only
 # - workflow_dispatch dry_run=false -> full release, with optional release_tag override
@@ -72,7 +72,7 @@ jobs:
 
       - name: Resolve vendor zip path
         id: vendor
-        if: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true) }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true) }}
         env:
           EVENT: ${{ github.event_name }}
           INPUT_URL: ${{ inputs.vendor_zip_url }}
@@ -90,7 +90,7 @@ jobs:
           fi
 
       - name: Dry run (smoke test)
-        if: ${{ (github.event_name == 'push' && github.ref_type == 'branch') || (github.event_name == 'workflow_dispatch' && inputs.dry_run == true) }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
         run: |
           ./signing.sh --help
           bash -n signing.sh
@@ -98,7 +98,7 @@ jobs:
           unzip -v >/dev/null
 
       - name: Run signing
-        if: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true) }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true) }}
         run: |
           set -euo pipefail
           if [ -n "${{ steps.vendor.outputs.path }}" ]; then
@@ -109,7 +109,7 @@ jobs:
 
       - name: Discover output version
         id: out
-        if: ${{ github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true) }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true) }}
         run: |
           set -euo pipefail
           test -d zdefend/output
@@ -118,7 +118,7 @@ jobs:
 
       - name: Zip iOS xcframework for release asset
         id: ioszip
-        if: ${{ (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)) && steps.out.outputs.version != '' }}
+        if: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)) && steps.out.outputs.version != '' }}
         run: |
           set -euo pipefail
           VER="${{ steps.out.outputs.version }}"
@@ -131,7 +131,7 @@ jobs:
           fi
 
       - name: Upload build artifacts
-        if: ${{ env.ACT != 'true' && (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)) && steps.out.outputs.version != '' }}
+        if: ${{ env.ACT != 'true' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)) && steps.out.outputs.version != '' }}
         uses: actions/upload-artifact@v6
         with:
           name: zdefend-${{ steps.out.outputs.version }}
@@ -142,7 +142,7 @@ jobs:
 
       - name: Release metadata
         id: meta
-        if: ${{ env.ACT != 'true' && (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)) && steps.out.outputs.version != '' }}
+        if: ${{ env.ACT != 'true' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)) && steps.out.outputs.version != '' }}
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
             echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
@@ -153,7 +153,7 @@ jobs:
           fi
 
       - name: Create GitHub Release
-        if: ${{ env.ACT != 'true' && (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)) && steps.out.outputs.version != '' }}
+        if: ${{ env.ACT != 'true' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)) && steps.out.outputs.version != '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.meta.outputs.tag }}
@@ -191,9 +191,7 @@ jobs:
             elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" != "true" ]; then
               echo "Full run: signing and release steps were eligible to run (see steps above for success or errors)."
             elif [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_type }}" = "branch" ]; then
-              echo "Triggered by push to main: smoke test only, so signing, artifacts, and **Create GitHub Release** were **skipped on purpose**."
-              echo ""
-              echo "To publish a release from main, either push a \`v*\` tag or run this workflow manually with **dry_run = false**."
+              echo "Triggered by push to main: signing, artifacts, and **Create GitHub Release** were eligible to run."
             elif [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_type }}" = "tag" ]; then
               echo "Triggered by tag push: release uses the pushed tag name."
             fi
