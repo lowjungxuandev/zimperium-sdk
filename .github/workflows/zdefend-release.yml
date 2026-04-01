@@ -154,16 +154,29 @@ jobs:
 
       - name: Create GitHub Release
         if: ${{ env.ACT != 'true' && (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)) && steps.out.outputs.version != '' }}
-        uses: softprops/action-gh-release@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          tag_name: ${{ steps.meta.outputs.tag }}
-          name: ${{ steps.meta.outputs.tag }}
-          generate_release_notes: true
-          fail_on_unmatched_files: false
-          files: |
-            zdefend/output/${{ steps.out.outputs.version }}/android/ZDefend.aar
-            zdefend/output/${{ steps.out.outputs.version }}/iOS/ZDefend.xcframework.zip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.out.outputs.version }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          AAR="zdefend/output/$VERSION/android/ZDefend.aar"
+          IOS_ZIP="zdefend/output/$VERSION/iOS/ZDefend.xcframework.zip"
+          FILES=()
+          [ -f "$AAR" ] && FILES+=("$AAR")
+          [ -f "$IOS_ZIP" ] && FILES+=("$IOS_ZIP")
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            if [ "${#FILES[@]}" -gt 0 ]; then
+              gh release upload "$TAG" "${FILES[@]}" --clobber
+            fi
+          else
+            gh release create "$TAG" "${FILES[@]}" \
+              --title "$TAG" \
+              --generate-notes \
+              --target "$TARGET_SHA"
+          fi
 
       - name: Job summary (dry run vs release)
         if: always()
