@@ -1,0 +1,153 @@
+# zDefend: sign SDK and publish GitHub Release (AAR + optional xcframework zip).
+# act skips steps that need GitHub (ACTIONS_RUNTIME_TOKEN / release API): upload-artifact,
+# release metadata, Create GitHub Release when env.ACT=true (nektos/act sets this locally).
+# Optional: act --artifact-server-path /tmp/act-artifacts to enable upload-artifact locally.
+name: zDefend release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Only validate Java/unzip and signing.sh (no vendor zip needed)'
+        type: boolean
+        default: true
+      release_tag:
+        description: 'Tag for the release when using workflow_dispatch (e.g. v5.8.54)'
+        type: string
+        required: false
+      vendor_zip_url:
+        description: 'Optional URL to download *defend*.zip before signing'
+        type: string
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  sign-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip curl zip
+
+      - name: Make signing executable
+        run: chmod +x signing.sh
+
+      - name: Optional CSV from repository secrets
+        env:
+          ZDEFEND_ANDROID_CSV: ${{ secrets.ZDEFEND_ANDROID_CSV }}
+          ZDEFEND_IOS_CSV: ${{ secrets.ZDEFEND_IOS_CSV }}
+        run: |
+          if [ -n "${ZDEFEND_ANDROID_CSV:-}" ]; then
+            mkdir -p csv/android
+            printf '%s\n' "$ZDEFEND_ANDROID_CSV" > csv/android/zdefend.csv
+          fi
+          if [ -n "${ZDEFEND_IOS_CSV:-}" ]; then
+            mkdir -p csv/ios
+            printf '%s\n' "$ZDEFEND_IOS_CSV" > csv/ios/zdefend.csv
+          fi
+
+      - name: Resolve vendor zip path
+        id: vendor
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_URL: ${{ inputs.vendor_zip_url }}
+          SECRET_URL: ${{ secrets.VENDOR_ZIP_URL }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ] && [ -n "${INPUT_URL:-}" ]; then
+            curl -fL --retry 3 -o "${{ github.workspace }}/vendor-zdefend.zip" "$INPUT_URL"
+            echo "path=${{ github.workspace }}/vendor-zdefend.zip" >> "$GITHUB_OUTPUT"
+          elif [ -n "${SECRET_URL:-}" ]; then
+            curl -fL --retry 3 -o "${{ github.workspace }}/vendor-zdefend.zip" "$SECRET_URL"
+            echo "path=${{ github.workspace }}/vendor-zdefend.zip" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dry run (smoke test)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
+        run: |
+          ./signing.sh --help
+          bash -n signing.sh
+          java -version
+          unzip -v >/dev/null
+
+      - name: Run signing
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
+        run: |
+          set -euo pipefail
+          if [ -n "${{ steps.vendor.outputs.path }}" ]; then
+            ./signing.sh --zip "${{ steps.vendor.outputs.path }}"
+          else
+            ./signing.sh
+          fi
+
+      - name: Discover output version
+        id: out
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
+        run: |
+          set -euo pipefail
+          test -d zdefend/output
+          V=$(ls -1 zdefend/output | head -1)
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Zip iOS xcframework for release asset
+        id: ioszip
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) && steps.out.outputs.version != '' }}
+        run: |
+          set -euo pipefail
+          VER="${{ steps.out.outputs.version }}"
+          IOS="zdefend/output/$VER/iOS/ZDefend.xcframework"
+          if [ -d "$IOS" ]; then
+            (cd "zdefend/output/$VER/iOS" && zip -rq ZDefend.xcframework.zip ZDefend.xcframework)
+            echo "zip_path=zdefend/output/$VER/iOS/ZDefend.xcframework.zip" >> "$GITHUB_OUTPUT"
+          else
+            echo "zip_path=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload build artifacts
+        if: ${{ env.ACT != 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) && steps.out.outputs.version != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: zdefend-${{ steps.out.outputs.version }}
+          if-no-files-found: warn
+          path: |
+            zdefend/output/${{ steps.out.outputs.version }}/android/ZDefend.aar
+            zdefend/output/${{ steps.out.outputs.version }}/iOS/ZDefend.xcframework.zip
+
+      - name: Release metadata
+        id: meta
+        if: ${{ env.ACT != 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) && steps.out.outputs.version != '' }}
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ inputs.release_tag }}" ]; then
+            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v${{ steps.out.outputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        if: ${{ env.ACT != 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) && steps.out.outputs.version != '' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
+            zdefend/output/${{ steps.out.outputs.version }}/android/ZDefend.aar
+            zdefend/output/${{ steps.out.outputs.version }}/iOS/ZDefend.xcframework.zip

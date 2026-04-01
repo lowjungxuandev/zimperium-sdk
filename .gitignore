@@ -1,0 +1,11 @@
+# zDefend signing: unzipped vendor tree (zdefend/source) and outputs (zdefend/output)
+zdefend/
+
+# Vendor SDK zip in repo root (script also searches zdefend/, which is ignored above)
+/*defend*.zip
+
+# GitHub Actions / act: curl download step in zdefend-release.yml
+vendor-zdefend.zip
+
+# macOS
+.DS_Store
