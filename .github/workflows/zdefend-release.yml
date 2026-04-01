@@ -12,10 +12,6 @@
 # act: upload-artifact / release skipped when env.ACT=true. Optional: --artifact-server-path
 name: zDefend release
 
-env:
-  # Quieter Node 20 deprecation warnings on ubuntu-latest (see GitHub changelog)
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 on:
   push:
     branches:
@@ -45,9 +41,9 @@ jobs:
   sign-and-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -136,7 +132,7 @@ jobs:
 
       - name: Upload build artifacts
         if: ${{ env.ACT != 'true' && (github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)) && steps.out.outputs.version != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: zdefend-${{ steps.out.outputs.version }}
           if-no-files-found: warn
