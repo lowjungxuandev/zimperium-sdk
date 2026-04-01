@@ -1,0 +1,18 @@
+# Local secrets (never commit)
+.env
+.env.*
+
+# zDefend signing: downloads, config JSON, unzipped vendor tree, outputs
+tmp/
+
+# Legacy local layout (pre-tmp); safe to remove if unused
+zdefend/
+
+# Vendor SDK zip in repo root (script also searches zdefend/, which is ignored above)
+/*defend*.zip
+
+# GitHub Actions / act: curl download step in zdefend-release.yml
+vendor-zdefend.zip
+
+# macOS
+.DS_Store
