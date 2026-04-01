@@ -1,7 +1,0 @@
-# Apple Silicon (macOS ARM): linux/arm64 matches GitHub-hosted ubuntu-latest on arm runners.
-# Smaller image than full-latest (faster first pull). Override with: act -P ubuntu-latest=...
--P ubuntu-latest=catthehacker/ubuntu:act-latest
---container-architecture linux/arm64
-#
-# If something only passes on x86 GitHub runners, try emulated amd64 (slower):
-#   act --container-architecture linux/amd64

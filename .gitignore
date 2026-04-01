@@ -1,4 +1,7 @@
-# zDefend signing: unzipped vendor tree (zdefend/source) and outputs (zdefend/output)
+# zDefend signing: downloads, config JSON, unzipped vendor tree, outputs
+tmp/
+
+# Legacy local layout (pre-tmp); safe to remove if unused
 zdefend/
 
 # Vendor SDK zip in repo root (script also searches zdefend/, which is ignored above)

@@ -1,198 +1,106 @@
-# zDefend: sign SDK and publish GitHub Release (AAR + optional xcframework zip).
-#
-# Triggers:
-# - push to main -> full release
-# - push of tag v* -> full release, using the pushed tag name
-# - workflow_dispatch default dry_run=true -> smoke only
-# - workflow_dispatch dry_run=false -> full release, with optional release_tag override
-#
-# Full release requires a vendor zip (vendor_zip_url or secret VENDOR_ZIP_URL or *defend*.zip in repo).
-# Otherwise tag defaults to v<sdk version from output>.
-#
-# act: upload-artifact / release skipped when env.ACT=true. Optional: --artifact-server-path
-name: zDefend release
+name: zDefend Release
 
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: 'Only validate Java/unzip and signing.sh (no vendor zip needed)'
-        type: boolean
-        default: true
       release_tag:
-        description: 'Tag for the release when using workflow_dispatch (e.g. v5.8.54)'
-        type: string
+        description: "Optional GitHub release tag. Defaults to v<signed version>"
         required: false
-      vendor_zip_url:
-        description: 'Optional URL to download *defend*.zip before signing'
         type: string
-        required: false
 
 permissions:
   contents: write
-  pull-requests: read
 
 jobs:
-  sign-and-release:
+  release:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
-      - name: Install tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y unzip curl zip
-
-      - name: Make signing executable
-        run: chmod +x signing.sh
-
-      - name: Optional CSV from repository secrets
+      - name: Setup environment
         env:
+          REQUEST_ID: ${{ secrets.REQUEST_ID }}
+          TOKEN: ${{ secrets.TOKEN }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
           ZDEFEND_ANDROID_CSV: ${{ secrets.ZDEFEND_ANDROID_CSV }}
           ZDEFEND_IOS_CSV: ${{ secrets.ZDEFEND_IOS_CSV }}
         run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y jq unzip zip curl openssl
+
+          : "${REQUEST_ID:?Missing GitHub secret REQUEST_ID}"
+          : "${TOKEN:?Missing GitHub secret TOKEN}"
+          : "${API_TOKEN:?Missing GitHub secret API_TOKEN}"
+
+          printf 'Request_ID=%s\nToken=%s\nAPI_Token=%s\n' \
+            "$REQUEST_ID" \
+            "$TOKEN" \
+            "$API_TOKEN" > .env
+
           if [ -n "${ZDEFEND_ANDROID_CSV:-}" ]; then
             mkdir -p csv/android
             printf '%s\n' "$ZDEFEND_ANDROID_CSV" > csv/android/zdefend.csv
           fi
+
           if [ -n "${ZDEFEND_IOS_CSV:-}" ]; then
             mkdir -p csv/ios
             printf '%s\n' "$ZDEFEND_IOS_CSV" > csv/ios/zdefend.csv
           fi
 
-      - name: Resolve vendor zip path
-        id: vendor
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true) }}
-        env:
-          EVENT: ${{ github.event_name }}
-          INPUT_URL: ${{ inputs.vendor_zip_url }}
-          SECRET_URL: ${{ secrets.VENDOR_ZIP_URL }}
-        run: |
-          set -euo pipefail
-          if [ "$EVENT" = "workflow_dispatch" ] && [ -n "${INPUT_URL:-}" ]; then
-            curl -fL --retry 3 -o "${{ github.workspace }}/vendor-zdefend.zip" "$INPUT_URL"
-            echo "path=${{ github.workspace }}/vendor-zdefend.zip" >> "$GITHUB_OUTPUT"
-          elif [ -n "${SECRET_URL:-}" ]; then
-            curl -fL --retry 3 -o "${{ github.workspace }}/vendor-zdefend.zip" "$SECRET_URL"
-            echo "path=${{ github.workspace }}/vendor-zdefend.zip" >> "$GITHUB_OUTPUT"
-          else
-            echo "path=" >> "$GITHUB_OUTPUT"
-          fi
+          chmod +x scripts/download.sh scripts/csv.sh scripts/sign.sh scripts/test.sh
 
-      - name: Dry run (smoke test)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
-        run: |
-          ./signing.sh --help
-          bash -n signing.sh
-          java -version
-          unzip -v >/dev/null
+      - name: download.sh
+        run: ./scripts/download.sh
 
-      - name: Run signing
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true) }}
-        run: |
-          set -euo pipefail
-          if [ -n "${{ steps.vendor.outputs.path }}" ]; then
-            ./signing.sh --zip "${{ steps.vendor.outputs.path }}"
-          else
-            ./signing.sh
-          fi
+      - name: csv.sh
+        run: ./scripts/csv.sh
 
-      - name: Discover output version
-        id: out
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true) }}
-        run: |
-          set -euo pipefail
-          test -d zdefend/output
-          V=$(ls -1 zdefend/output | head -1)
-          echo "version=$V" >> "$GITHUB_OUTPUT"
+      - name: sign.sh
+        run: ./scripts/sign.sh
 
-      - name: Zip iOS xcframework for release asset
-        id: ioszip
-        if: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)) && steps.out.outputs.version != '' }}
-        run: |
-          set -euo pipefail
-          VER="${{ steps.out.outputs.version }}"
-          IOS="zdefend/output/$VER/iOS/ZDefend.xcframework"
-          if [ -d "$IOS" ]; then
-            (cd "zdefend/output/$VER/iOS" && zip -rq ZDefend.xcframework.zip ZDefend.xcframework)
-            echo "zip_path=zdefend/output/$VER/iOS/ZDefend.xcframework.zip" >> "$GITHUB_OUTPUT"
-          else
-            echo "zip_path=" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Upload build artifacts
-        if: ${{ env.ACT != 'true' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)) && steps.out.outputs.version != '' }}
-        uses: actions/upload-artifact@v6
-        with:
-          name: zdefend-${{ steps.out.outputs.version }}
-          if-no-files-found: warn
-          path: |
-            zdefend/output/${{ steps.out.outputs.version }}/android/ZDefend.aar
-            zdefend/output/${{ steps.out.outputs.version }}/iOS/ZDefend.xcframework.zip
-
-      - name: Release metadata
-        id: meta
-        if: ${{ env.ACT != 'true' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)) && steps.out.outputs.version != '' }}
-        run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          elif [ -n "${{ inputs.release_tag }}" ]; then
-            echo "tag=${{ inputs.release_tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=v${{ steps.out.outputs.version }}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create GitHub Release
-        if: ${{ env.ACT != 'true' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.dry_run != true)) && steps.out.outputs.version != '' }}
+      - name: Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.meta.outputs.tag }}
-          VERSION: ${{ steps.out.outputs.version }}
-          TARGET_SHA: ${{ github.sha }}
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          AAR="zdefend/output/$VERSION/android/ZDefend.aar"
-          IOS_ZIP="zdefend/output/$VERSION/iOS/ZDefend.xcframework.zip"
+
+          VERSION_DIR="$(find tmp/zdefend/output -mindepth 1 -maxdepth 1 -type d | sort | head -1)"
+          [ -n "$VERSION_DIR" ] || { echo "No signed output found in tmp/zdefend/output"; exit 1; }
+
+          VERSION="$(basename "$VERSION_DIR")"
+          TAG="${INPUT_RELEASE_TAG:-v$VERSION}"
+          AAR="${VERSION_DIR}/android/ZDefend.aar"
+          IOS_DIR="${VERSION_DIR}/iOS/ZDefend.xcframework"
+          IOS_ZIP="${VERSION_DIR}/iOS/ZDefend.xcframework.zip"
           FILES=()
-          [ -f "$AAR" ] && FILES+=("$AAR")
-          [ -f "$IOS_ZIP" ] && FILES+=("$IOS_ZIP")
+
+          [ -f "$AAR" ] || { echo "Missing $AAR"; exit 1; }
+          FILES+=("$AAR")
+
+          if [ -d "$IOS_DIR" ]; then
+            (
+              cd "${VERSION_DIR}/iOS"
+              rm -f ZDefend.xcframework.zip
+              zip -rq ZDefend.xcframework.zip ZDefend.xcframework
+            )
+            FILES+=("$IOS_ZIP")
+          fi
 
           if gh release view "$TAG" >/dev/null 2>&1; then
-            if [ "${#FILES[@]}" -gt 0 ]; then
-              gh release upload "$TAG" "${FILES[@]}" --clobber
-            fi
+            gh release upload "$TAG" "${FILES[@]}" --clobber
           else
             gh release create "$TAG" "${FILES[@]}" \
               --title "$TAG" \
-              --generate-notes \
-              --target "$TARGET_SHA"
+              --generate-notes
           fi
-
-      - name: Job summary (dry run vs release)
-        if: always()
-        run: |
-          {
-            echo "## zDefend release"
-            echo ""
-            if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
-              echo "**Dry run** was enabled: signing, artifacts, and **Create GitHub Release** were **skipped on purpose**."
-              echo ""
-              echo "To publish a release, run this workflow again with **dry_run = false** and supply a vendor \`*defend*.zip\` (input \`vendor_zip_url\` or secret \`VENDOR_ZIP_URL\`, or ensure the zip is in the repo). Set **release_tag** if you want a specific tag name (e.g. \`v5.8.54\`)."
-            elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" != "true" ]; then
-              echo "Full run: signing and release steps were eligible to run (see steps above for success or errors)."
-            elif [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_type }}" = "branch" ]; then
-              echo "Triggered by push to main: signing, artifacts, and **Create GitHub Release** were eligible to run."
-            elif [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref_type }}" = "tag" ]; then
-              echo "Triggered by tag push: release uses the pushed tag name."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
